@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Burger Chase 🤡</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+    }
+    #wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      max-width: 95vmin;
+      max-height: 75vh;
+      width: auto;
+      height: auto;
+    }
+    #dpad {
+      display: grid;
+      grid-template-areas:
+        ".    up   ."
+        "left .    right"
+        ".    down .";
+      grid-template-columns: 56px 56px 56px;
+      grid-template-rows: 56px 56px 56px;
+      gap: 4px;
+    }
+    #dpad button {
+      background: rgba(80,80,120,0.6);
+      border: 2px solid rgba(150,150,200,0.5);
+      border-radius: 10px;
+      color: #fff;
+      font-size: 26px;
+      cursor: pointer;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #dpad button:active { background: rgba(120,120,180,0.8); }
+    #dpad button[data-d="UP"]    { grid-area: up; }
+    #dpad button[data-d="DOWN"]  { grid-area: down; }
+    #dpad button[data-d="LEFT"]  { grid-area: left; }
+    #dpad button[data-d="RIGHT"] { grid-area: right; }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="dpad">
+    <button data-d="UP">↑</button>
+    <button data-d="LEFT">←</button>
+    <button data-d="RIGHT">→</button>
+    <button data-d="DOWN">↓</button>
+  </div>
+</div>
+<script>
+// ============================================================
+// CONSTANTS
+// ============================================================
+const TILE = 20;
+const COLS = 28;
+const ROWS = 31;
+const CW   = TILE * COLS;       // 560
+const CH   = TILE * ROWS + 44;  // 664  (620 maze + 44 hud)
+const MH   = TILE * ROWS;       // 620  maze height
+
+const WALL = 1, PATH = 0, BURGER = 2, GATE = 4;
+
+const UP    = {x:0,  y:-1, n:'UP'};
+const DOWN  = {x:0,  y:1,  n:'DOWN'};
+const LEFT  = {x:-1, y:0,  n:'LEFT'};
+const RIGHT = {x:1,  y:0,  n:'RIGHT'};
+const NONE  = {x:0,  y:0,  n:'NONE'};
+const DIRS4 = [UP, DOWN, LEFT, RIGHT];
+
+function opp(d) {
+  if (d===UP)    return DOWN;
+  if (d===DOWN)  return UP;
+  if (d===LEFT)  return RIGHT;
+  if (d===RIGHT) return LEFT;
+  return NONE;
+}
+
+// ============================================================
+// MAZE  (31 rows × 28 cols)
+// 1=wall  0=open  2=burger  4=ghost-gate
+// ============================================================
+const TEMPLATE = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], // 0
+  [1,2,2,2,2,2,2,2,2,2,2,2,2,1,1,2,2,2,2,2,2,2,2,2,2,2,2,1], // 1
+  [1,2,1,1,1,1,2,1,1,1,1,1,2,1,1,2,1,1,1,1,1,2,1,1,1,1,2,1], // 2
+  [1,2,1,1,1,1,2,1,1,1,1,1,2,1,1,2,1,1,1,1,1,2,1,1,1,1,2,1], // 3
+  [1,2,1,1,1,1,2,1,1,1,1,1,2,1,1,2,1,1,1,1,1,2,1,1,1,1,2,1], // 4
+  [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1], // 5
+  [1,2,1,1,1,1,2,1,1,2,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,2,1], // 6
+  [1,2,1,1,1,1,2,1,1,2,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,2,1], // 7
+  [1,2,2,2,2,2,2,1,1,2,2,2,2,1,1,2,2,2,2,1,1,2,2,2,2,2,2,1], // 8
+  [1,1,1,1,1,1,2,1,1,1,1,1,0,1,1,0,1,1,1,1,1,2,1,1,1,1,1,1], // 9
+  [1,1,1,1,1,1,2,1,1,1,1,1,0,1,1,0,1,1,1,1,1,2,1,1,1,1,1,1], // 10
+  [1,1,1,1,1,1,2,1,1,0,0,0,0,0,0,0,0,0,0,1,1,2,1,1,1,1,1,1], // 11
+  [1,1,1,1,1,1,2,1,1,0,1,1,1,4,4,1,1,1,0,1,1,2,1,1,1,1,1,1], // 12
+  [1,1,1,1,1,1,2,1,1,0,1,0,0,0,0,0,0,1,0,1,1,2,1,1,1,1,1,1], // 13
+  [0,0,0,0,0,0,2,0,0,0,1,0,0,0,0,0,0,1,0,0,0,2,0,0,0,0,0,0], // 14 tunnel
+  [1,1,1,1,1,1,2,1,1,0,1,0,0,0,0,0,0,1,0,1,1,2,1,1,1,1,1,1], // 15
+  [1,1,1,1,1,1,2,1,1,0,1,1,1,1,1,1,1,1,0,1,1,2,1,1,1,1,1,1], // 16
+  [1,1,1,1,1,1,2,1,1,0,0,0,0,0,0,0,0,0,0,1,1,2,1,1,1,1,1,1], // 17
+  [1,1,1,1,1,1,2,1,1,0,1,1,1,1,1,1,1,1,0,1,1,2,1,1,1,1,1,1], // 18
+  [1,1,1,1,1,1,2,1,1,0,1,1,1,1,1,1,1,1,0,1,1,2,1,1,1,1,1,1], // 19
+  [1,2,2,2,2,2,2,2,2,2,2,2,2,1,1,2,2,2,2,2,2,2,2,2,2,2,2,1], // 20
+  [1,2,1,1,1,1,2,1,1,1,1,1,2,1,1,2,1,1,1,1,1,2,1,1,1,1,2,1], // 21
+  [1,2,1,1,1,1,2,1,1,1,1,1,2,1,1,2,1,1,1,1,1,2,1,1,1,1,2,1], // 22
+  [1,2,2,2,1,1,2,2,2,2,2,2,2,0,0,2,2,2,2,2,2,2,1,1,2,2,2,1], // 23
+  [1,1,1,2,1,1,2,1,1,2,1,1,1,1,1,1,1,1,2,1,1,2,1,1,2,1,1,1], // 24
+  [1,1,1,2,1,1,2,1,1,2,1,1,1,1,1,1,1,1,2,1,1,2,1,1,2,1,1,1], // 25
+  [1,2,2,2,2,2,2,1,1,2,2,2,2,1,1,2,2,2,2,1,1,2,2,2,2,2,2,1], // 26
+  [1,2,1,1,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,1,1,1,1,1,1,2,1], // 27
+  [1,2,1,1,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,1,1,1,1,1,1,2,1], // 28
+  [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1], // 29
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], // 30
+];
+
+// ============================================================
+// CANVAS
+// ============================================================
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+canvas.width  = CW;
+canvas.height = CH;
+
+// ============================================================
+// AUDIO
+// ============================================================
+let ac = null;
+function audio() {
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+function tone(freq, dur, type = 'square', vol = 0.18) {
+  try {
+    const a = audio();
+    const o = a.createOscillator();
+    const g = a.createGain();
+    o.connect(g); g.connect(a.destination);
+    o.type = type;
+    o.frequency.setValueAtTime(freq, a.currentTime);
+    g.gain.setValueAtTime(vol, a.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + dur);
+    o.start(); o.stop(a.currentTime + dur);
+  } catch (_) {}
+}
+const sndEat   = () => tone(700, 0.04);
+const sndDeath = () => [440,392,349,311,277,246].forEach((f,i) => setTimeout(() => tone(f, 0.12, 'sawtooth', 0.28), i*100));
+const sndWin   = () => [523,659,784,1047].forEach((f,i) => setTimeout(() => tone(f, 0.18, 'triangle', 0.28), i*130));
+
+// ============================================================
+// LIVE MAZE + STATE
+// ============================================================
+let maze, burgersLeft, totalBurgers;
+
+const G = {
+  phase: 'TITLE',   // TITLE | PLAYING | DYING | GAMEOVER | WIN
+  score: 0,
+  hi: +localStorage.getItem('bcHi') || 0,
+  lives: 3,
+  level: 1,
+  modeIdx: 0,
+  modeTimer: 0,
+  deathTimer: 0,
+};
+
+const SCHEDULE = [
+  {m:'SCATTER', d:7},
+  {m:'CHASE',   d:20},
+  {m:'SCATTER', d:7},
+  {m:'CHASE',   d:20},
+  {m:'SCATTER', d:5},
+  {m:'CHASE',   d:1e9},
+];
+
+// ============================================================
+// PLAYER
+// ============================================================
+const P = {
+  x:13.5, y:23,
+  dir: NONE, nextDir: NONE,
+  speed: 7,
+  bob: 0,
+};
+
+// ============================================================
+// GHOSTS
+// ============================================================
+function ghost(id, cx, cy, sx, sy, delay) {
+  return { id, x:cx, y:cy, dir:UP, speed:5,
+           mode:'SCATTER', sx, sy,
+           inHouse:true, ht:0, delay };
+}
+let GH;
+
+// ============================================================
+// MAZE HELPERS
+// ============================================================
+function cloneMaze() { maze = TEMPLATE.map(r => [...r]); }
+
+function cell(col, row) {
+  if (row < 0 || row >= ROWS) return WALL;
+  const c = ((col % COLS) + COLS) % COLS;
+  return maze[row][c];
+}
+
+function isWall(col, row) { return cell(col, row) === WALL; }
+function isGate(col, row) { return cell(col, row) === GATE; }
+
+// Player passability: walls and gates block
+function playerOk(col, row) {
+  const v = cell(col, row);
+  return v !== WALL && v !== GATE;
+}
+
+// Ghost passability: gates only block non-house ghosts
+function ghostOk(col, row, inHouse) {
+  const v = cell(col, row);
+  if (v === WALL) return false;
+  if (v === GATE) return inHouse;
+  return true;
+}
+
+function countBurgers() {
+  let n = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (maze[r][c] === BURGER) n++;
+  totalBurgers = burgersLeft = n;
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+const DK = {ArrowUp:UP,ArrowDown:DOWN,ArrowLeft:LEFT,ArrowRight:RIGHT,
+            w:UP,s:DOWN,a:LEFT,d:RIGHT,W:UP,S:DOWN,A:LEFT,D:RIGHT};
+
+window.addEventListener('keydown', e => {
+  audio();
+  if (DK[e.key]) { P.nextDir = DK[e.key]; e.preventDefault(); }
+  if ((e.key==='Enter'||e.key===' ') && G.phase!=='PLAYING' && G.phase!=='DYING') {
+    startGame(); e.preventDefault();
+  }
+  if ((e.key==='p'||e.key==='P') && (G.phase==='PLAYING'||G.phase==='PAUSED')) {
+    G.phase = G.phase==='PAUSED' ? 'PLAYING' : 'PAUSED';
+    e.preventDefault();
+  }
+});
+
+// D-pad buttons
+document.querySelectorAll('#dpad button').forEach(btn => {
+  const d = {UP,DOWN,LEFT,RIGHT}[btn.dataset.d];
+  const press = e => {
+    e.preventDefault(); audio();
+    if (G.phase !== 'PLAYING' && G.phase !== 'DYING') startGame();
+    P.nextDir = d;
+  };
+  btn.addEventListener('touchstart', press, {passive:false});
+  btn.addEventListener('mousedown',  press);
+});
+
+// Tap canvas to start
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault(); audio();
+  if (G.phase !== 'PLAYING' && G.phase !== 'DYING') startGame();
+}, {passive:false});
+canvas.addEventListener('click', () => {
+  if (G.phase !== 'PLAYING' && G.phase !== 'DYING') startGame();
+});
+
+// ============================================================
+// RESET / INIT
+// ============================================================
+function resetPositions() {
+  P.x=13; P.y=23; P.dir=NONE; P.nextDir=NONE; P.bob=0;
+  GH = [
+    ghost(0, 13, 14, 26, 1,  0),
+    ghost(1, 14, 14,  1, 1,  3),
+    ghost(2, 12, 15, 26,29,  6),
+    ghost(3, 15, 15,  1,29,  9),
+  ];
+}
+
+function startGame() {
+  cloneMaze(); countBurgers(); resetPositions();
+  G.score=0; G.lives=3; G.level=1;
+  G.modeIdx=0; G.modeTimer=0;
+  G.phase='PLAYING';
+}
+
+// ============================================================
+// GHOST AI
+// ============================================================
+function chooseGhostDir(g) {
+  const col = Math.round(g.x);
+  const row = Math.round(g.y);
+
+  if (g.mode === 'SCATTER') {
+    let best=null, bestD=Infinity;
+    for (const d of DIRS4) {
+      if (d === opp(g.dir)) continue;
+      const nc=col+d.x, nr=row+d.y;
+      if (!ghostOk(nc,nr,g.inHouse)) continue;
+      if (d===UP && isGate(nc,nr)) continue; // can't go up through gate
+      const dist=(nc-g.sx)**2+(nr-g.sy)**2;
+      if (dist<bestD) { bestD=dist; best=d; }
+    }
+    return best || opp(g.dir);
+  }
+
+  if (g.mode === 'CHASE') {
+    let best=null, bestD=Infinity;
+    for (const d of DIRS4) {
+      if (d === opp(g.dir)) continue;
+      const nc=col+d.x, nr=row+d.y;
+      if (!ghostOk(nc,nr,g.inHouse)) continue;
+      if (d===UP && isGate(nc,nr)) continue;
+      const dist=(nc-P.x)**2+(nr-P.y)**2;
+      if (dist<bestD) { bestD=dist; best=d; }
+    }
+    return best || opp(g.dir);
+  }
+
+  return g.dir;
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+function updateModes(dt) {
+  if (G.modeIdx >= SCHEDULE.length) return;
+  G.modeTimer += dt;
+  if (G.modeTimer >= SCHEDULE[G.modeIdx].d) {
+    G.modeTimer = 0; G.modeIdx++;
+    if (G.modeIdx < SCHEDULE.length) {
+      const nm = SCHEDULE[G.modeIdx].m;
+      GH.forEach(g => {
+        if (g.mode==='SCATTER'||g.mode==='CHASE') {
+          g.mode = nm;
+          g.dir  = opp(g.dir);
+        }
+      });
+    }
+  }
+}
+
+function updatePlayer(dt) {
+  // Try queued direction — allow turn when stopped OR close to a grid center
+  if (P.nextDir !== NONE) {
+    const ax = Math.abs(P.x - Math.round(P.x));
+    const ay = Math.abs(P.y - Math.round(P.y));
+    if (P.dir === NONE || (ax < 0.4 && ay < 0.4)) {
+      const nc = Math.round(P.x) + P.nextDir.x;
+      const nr = Math.round(P.y) + P.nextDir.y;
+      if (playerOk(nc, nr)) {
+        if (P.dir === NONE) { P.x = Math.round(P.x); P.y = Math.round(P.y); }
+        P.dir = P.nextDir;
+        P.nextDir = NONE;
+      }
+    }
+  }
+
+  if (P.dir === NONE) return;
+
+  // Wall lookahead — stop before hitting wall
+  const lx = P.x + P.dir.x * 0.55;
+  const ly = P.y + P.dir.y * 0.55;
+  if (!playerOk(Math.round(lx), Math.round(ly))) {
+    P.x = Math.round(P.x);
+    P.y = Math.round(P.y);
+    P.dir = NONE;
+    return;
+  }
+
+  P.x += P.dir.x * P.speed * dt;
+  P.y += P.dir.y * P.speed * dt;
+  P.bob += dt * 10;
+
+  // Tunnel wrap
+  if (P.x < -0.5)        P.x = COLS - 0.5;
+  if (P.x > COLS - 0.5)  P.x = -0.5;
+
+  // Collect burger
+  const col = Math.round(P.x), row = Math.round(P.y);
+  if (row>=0 && row<ROWS && col>=0 && col<COLS && maze[row][col]===BURGER) {
+    maze[row][col] = PATH;
+    G.score += 10; burgersLeft--;
+    sndEat();
+    if (burgersLeft <= 0) {
+      G.phase = 'WIN';
+      if (G.score > G.hi) { G.hi = G.score; localStorage.setItem('bcHi', G.hi); }
+      sndWin();
+    }
+  }
+}
+
+function updateGhosts(dt) {
+  const curMode = G.modeIdx < SCHEDULE.length ? SCHEDULE[G.modeIdx].m : 'CHASE';
+  GH.forEach(g => {
+    if (g.inHouse) {
+      g.ht += dt;
+      if (g.ht < g.delay) return;
+      // Navigate toward row 11, col 13 (just above gate)
+      const tx=13, ty=11;
+      const step = g.speed * dt;
+      const dy = ty - g.y, dx = tx - g.x;
+      if (Math.abs(dy) > 0.05) {
+        g.y += Math.sign(dy) * Math.min(step, Math.abs(dy));
+      } else if (Math.abs(dx) > 0.05) {
+        g.x += Math.sign(dx) * Math.min(step, Math.abs(dx));
+      } else {
+        g.inHouse = false;
+        g.x = tx; g.y = ty;
+        g.dir = UP;
+        g.mode = curMode;
+      }
+      return;
+    }
+
+    // Snap and pick new dir at tile centers
+    const col = Math.round(g.x), row = Math.round(g.y);
+    if (Math.abs(g.x-col) < 0.08 && Math.abs(g.y-row) < 0.08) {
+      g.x = col; g.y = row;
+      g.dir = chooseGhostDir(g);
+    }
+
+    g.x += g.dir.x * g.speed * dt;
+    g.y += g.dir.y * g.speed * dt;
+
+    // Tunnel wrap
+    if (g.x < -0.5)        g.x = COLS - 0.5;
+    if (g.x > COLS - 0.5)  g.x = -0.5;
+  });
+}
+
+function checkCollision() {
+  GH.forEach(g => {
+    if (g.inHouse) return;
+    if (Math.hypot(P.x-g.x, P.y-g.y) < 0.85) {
+      G.lives--;
+      sndDeath();
+      G.phase = 'DYING';
+      G.deathTimer = 1.8;
+      if (G.score > G.hi) { G.hi = G.score; localStorage.setItem('bcHi', G.hi); }
+    }
+  });
+}
+
+// ============================================================
+// DRAW
+// ============================================================
+function drawMaze() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = c*TILE, y = r*TILE, v = maze[r][c];
+      if (v === WALL) {
+        ctx.fillStyle = '#1515cc';
+        ctx.fillRect(x, y, TILE, TILE);
+        // inner highlight border
+        ctx.strokeStyle = '#4444ff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x+1, y+1, TILE-2, TILE-2);
+      } else if (v === BURGER) {
+        ctx.font = `${TILE*0.68}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🍔', x+TILE/2, y+TILE/2);
+      } else if (v === GATE) {
+        ctx.fillStyle = '#ffaaff';
+        ctx.fillRect(x, y+TILE*0.38, TILE, TILE*0.24);
+      }
+    }
+  }
+}
+
+function drawPlayer() {
+  const scale = 1 + Math.sin(P.bob)*0.08;
+  const s = TILE * scale;
+  ctx.font = `${s}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🤡', P.x*TILE + TILE/2, P.y*TILE + TILE/2);
+}
+
+function drawGhosts() {
+  GH.forEach(g => {
+    ctx.save();
+    const px = g.x*TILE + TILE/2;
+    const py = g.y*TILE + TILE/2;
+    ctx.font = `${TILE*0.88}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🍳', px, py);
+    ctx.restore();
+  });
+}
+
+function drawHUD() {
+  const y = MH;
+  ctx.fillStyle = '#0a0a14';
+  ctx.fillRect(0, y, CW, CH-y);
+
+  ctx.font = 'bold 14px monospace';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'left';
+  ctx.fillText(`SCORE: ${G.score}`, 8, y+14);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText(`BEST: ${G.hi}`, CW/2, y+14);
+
+  // Lives as clown emoji
+  ctx.font = '14px serif';
+  ctx.textAlign = 'right';
+  let lx = CW - 6;
+  for (let i = 0; i < G.lives; i++) {
+    ctx.fillText('🤡', lx, y+14);
+    lx -= 20;
+  }
+
+  // Level
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#555';
+  ctx.textAlign = 'left';
+  ctx.fillText(`LVL ${G.level}`, 8, y+34);
+}
+
+function drawOverlay() {
+  ctx.fillStyle = 'rgba(0,0,0,0.80)';
+  ctx.fillRect(0, 0, CW, MH);
+
+  const mx = CW/2, my = MH/2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const blink = Math.floor(Date.now()/500)%2===0;
+
+  if (G.phase === 'TITLE') {
+    ctx.font = 'bold 26px monospace';
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText('🤡  BURGER CHASE  🍳', mx, my-80);
+
+    ctx.font = '15px monospace';
+    ctx.fillStyle = '#ddd';
+    ctx.fillText('Collect all  🍔  burgers', mx, my-35);
+    ctx.fillText('Dodge the  🍳  frying pans!', mx, my-10);
+    ctx.fillText('Arrow keys  /  WASD  /  D-pad', mx, my+22);
+
+    if (blink) {
+      ctx.font = 'bold 16px monospace';
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText('PRESS ENTER or TAP TO START', mx, my+68);
+    }
+
+  } else if (G.phase === 'DYING') {
+    ctx.font = '52px serif';
+    ctx.fillText('💀', mx, my);
+
+  } else if (G.phase === 'GAMEOVER') {
+    ctx.font = 'bold 34px monospace';
+    ctx.fillStyle = '#ff4455';
+    ctx.fillText('GAME OVER', mx, my-30);
+    ctx.font = '17px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`Score: ${G.score}`, mx, my+16);
+    if (blink) {
+      ctx.font = '14px monospace';
+      ctx.fillStyle = '#999';
+      ctx.fillText('PRESS ENTER / TAP TO RETRY', mx, my+52);
+    }
+
+  } else if (G.phase === 'WIN') {
+    ctx.font = 'bold 34px monospace';
+    ctx.fillStyle = '#44ff88';
+    ctx.fillText('YOU WIN! 🎉', mx, my-30);
+    ctx.font = '17px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`Score: ${G.score}`, mx, my+16);
+    if (blink) {
+      ctx.font = '14px monospace';
+      ctx.fillStyle = '#999';
+      ctx.fillText('PRESS ENTER / TAP TO PLAY AGAIN', mx, my+52);
+    }
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+let lastT = 0;
+function loop(ts) {
+  const dt = Math.min((ts - lastT) / 1000, 0.05);
+  lastT = ts;
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, CW, CH);
+
+  drawMaze();
+
+  if (G.phase === 'PLAYING') {
+    updateModes(dt);
+    updatePlayer(dt);
+    updateGhosts(dt);
+    checkCollision();
+  } else if (G.phase === 'PAUSED') {
+    // no updates
+  } else if (G.phase === 'DYING') {
+    G.deathTimer -= dt;
+    if (G.deathTimer <= 0) {
+      if (G.lives > 0) { resetPositions(); G.phase='PLAYING'; }
+      else             { G.phase = 'GAMEOVER'; }
+    }
+  }
+
+  drawGhosts();
+  drawPlayer();
+  drawHUD();
+
+  if (G.phase !== 'PLAYING') drawOverlay();
+
+  if (G.phase === 'PAUSED') {
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(0, 0, CW, MH);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = 'bold 36px monospace';
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText('PAUSED', CW/2, MH/2 - 16);
+    ctx.font = '15px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText('Press P to resume', CW/2, MH/2 + 22);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// Initialize maze and ghosts so the title screen can render
+cloneMaze(); countBurgers(); resetPositions();
+
+requestAnimationFrame(ts => { lastT = ts; requestAnimationFrame(loop); });
+</script>
+</body>
+</html>
