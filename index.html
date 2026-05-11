@@ -208,7 +208,9 @@ const P = {
 // GHOSTS
 // ============================================================
 function ghost(id, cx, cy, sx, sy, delay) {
-  return { id, x:cx, y:cy, dir:UP, speed:5,
+  return { id, x:cx, y:cy,
+           tx:cx, ty:cy,   // target tile (integer coords)
+           dir:UP, speed:5,
            mode:'SCATTER', sx, sy,
            inHouse:true, ht:0, delay };
 }
@@ -418,39 +420,66 @@ function updatePlayer(dt) {
 function updateGhosts(dt) {
   const curMode = G.modeIdx < SCHEDULE.length ? SCHEDULE[G.modeIdx].m : 'CHASE';
   GH.forEach(g => {
+
+    // --- House exit ---
     if (g.inHouse) {
       g.ht += dt;
       if (g.ht < g.delay) return;
-      // Navigate toward row 11, col 13 (just above gate)
-      const tx=13, ty=11;
+      const ex=13, ey=11;
       const step = g.speed * dt;
-      const dy = ty - g.y, dx = tx - g.x;
-      if (Math.abs(dy) > 0.05) {
+      const dy = ey - g.y, dx = ex - g.x;
+      if (Math.abs(dy) > 0.01) {
         g.y += Math.sign(dy) * Math.min(step, Math.abs(dy));
-      } else if (Math.abs(dx) > 0.05) {
+      } else if (Math.abs(dx) > 0.01) {
         g.x += Math.sign(dx) * Math.min(step, Math.abs(dx));
       } else {
+        // Exited — start tile-to-tile movement
         g.inHouse = false;
-        g.x = tx; g.y = ty;
+        g.x = ex; g.y = ey;
+        g.tx = ex; g.ty = ey;
         g.dir = UP;
         g.mode = curMode;
+        // Pick first target tile
+        const nd = chooseGhostDir(g);
+        g.dir = nd;
+        g.tx = ex + nd.x;
+        g.ty = ey + nd.y;
       }
       return;
     }
 
-    // Snap and pick new dir at tile centers
-    const col = Math.round(g.x), row = Math.round(g.y);
-    if (Math.abs(g.x-col) < 0.08 && Math.abs(g.y-row) < 0.08) {
-      g.x = col; g.y = row;
-      g.dir = chooseGhostDir(g);
+    // --- Tile-to-tile movement ---
+    const step = g.speed * dt;
+    const dx = g.tx - g.x;
+    const dy = g.ty - g.y;
+    const dist = Math.abs(dx) + Math.abs(dy); // cardinal movement = 1 axis at a time
+
+    if (dist <= step + 0.001) {
+      // Arrived at target tile — snap exactly
+      g.x = g.tx;
+      g.y = g.ty;
+
+      // Tunnel wrap on arrival
+      if (g.x < 0)     { g.x += COLS; g.tx = g.x; }
+      if (g.x >= COLS) { g.x -= COLS; g.tx = g.x; }
+
+      // Choose next direction from this tile
+      const nd = chooseGhostDir(g);
+      g.dir = nd;
+
+      // Set next target tile (with tunnel wrap)
+      let ntx = g.tx + nd.x;
+      const nty = g.ty + nd.y;
+      if (ntx < 0)     ntx = COLS - 1;
+      if (ntx >= COLS) ntx = 0;
+      g.tx = ntx;
+      g.ty = nty;
+
+    } else {
+      // Smoothly move toward target tile
+      g.x += Math.sign(dx) * Math.min(step, Math.abs(dx));
+      g.y += Math.sign(dy) * Math.min(step, Math.abs(dy));
     }
-
-    g.x += g.dir.x * g.speed * dt;
-    g.y += g.dir.y * g.speed * dt;
-
-    // Tunnel wrap
-    if (g.x < -0.5)        g.x = COLS - 0.5;
-    if (g.x > COLS - 0.5)  g.x = -0.5;
   });
 }
 
